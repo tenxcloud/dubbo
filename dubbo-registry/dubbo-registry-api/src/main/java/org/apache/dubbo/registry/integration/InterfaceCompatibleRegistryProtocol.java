@@ -149,13 +149,15 @@ public class InterfaceCompatibleRegistryProtocol extends RegistryProtocol {
 
         @Override
         public boolean isAvailable() {
-            return invoker.isAvailable() || serviceDiscoveryInvoker.isAvailable();
+            return invoker.isAvailable() || (null != serviceDiscoveryInvoker && serviceDiscoveryInvoker.isAvailable());
         }
 
         @Override
         public void destroy() {
             invoker.destroy();
-            serviceDiscoveryInvoker.destroy();
+            if (null != serviceDiscoveryInvoker) {
+                serviceDiscoveryInvoker.destroy();
+            }
         }
 
         @Override
@@ -170,7 +172,7 @@ public class InterfaceCompatibleRegistryProtocol extends RegistryProtocol {
 
         @Override
         public boolean isDestroyed() {
-            return invoker.isDestroyed() && serviceDiscoveryInvoker.isDestroyed();
+            return invoker.isDestroyed() && (null == serviceDiscoveryInvoker ||serviceDiscoveryInvoker.isDestroyed());
         }
     }
 
