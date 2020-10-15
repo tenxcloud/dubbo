@@ -17,30 +17,46 @@
 package org.apache.dubbo.registry.client;
 
 import org.apache.dubbo.common.URL;
+import org.apache.dubbo.common.config.configcenter.DynamicConfiguration;
 import org.apache.dubbo.common.extension.ExtensionLoader;
 import org.apache.dubbo.common.logger.Logger;
 import org.apache.dubbo.common.logger.LoggerFactory;
 import org.apache.dubbo.common.utils.Assert;
 import org.apache.dubbo.common.utils.CollectionUtils;
 import org.apache.dubbo.common.utils.NetUtils;
+import org.apache.dubbo.common.utils.UrlUtils;
 import org.apache.dubbo.registry.AddressListener;
 import org.apache.dubbo.registry.NotifyListener;
 import org.apache.dubbo.registry.client.event.listener.ServiceInstancesChangedListener;
+import org.apache.dubbo.registry.integration.AbstractConfiguratorListener;
 import org.apache.dubbo.registry.integration.DynamicDirectory;
 import org.apache.dubbo.rpc.Invoker;
 import org.apache.dubbo.rpc.Protocol;
 import org.apache.dubbo.rpc.RpcContext;
+import org.apache.dubbo.rpc.cluster.Configurator;
+import org.apache.dubbo.rpc.cluster.Router;
+import org.apache.dubbo.rpc.model.ApplicationModel;
 
 import java.util.ArrayList;
 import java.util.Collection;
 import java.util.Collections;
 import java.util.HashMap;
+import java.util.HashSet;
 import java.util.List;
 import java.util.Map;
+import java.util.Objects;
+import java.util.Optional;
+import java.util.Set;
+import java.util.stream.Collectors;
 
 import static org.apache.dubbo.common.constants.CommonConstants.DISABLED_KEY;
 import static org.apache.dubbo.common.constants.CommonConstants.ENABLED_KEY;
+import static org.apache.dubbo.common.constants.RegistryConstants.CONFIGURATORS_CATEGORY;
 import static org.apache.dubbo.common.constants.RegistryConstants.EMPTY_PROTOCOL;
+import static org.apache.dubbo.common.constants.RegistryConstants.PROVIDERS_CATEGORY;
+import static org.apache.dubbo.common.constants.RegistryConstants.ROUTERS_CATEGORY;
+import static org.apache.dubbo.registry.Constants.CONFIGURATORS_SUFFIX;
+import static org.apache.dubbo.rpc.cluster.Constants.ROUTER_KEY;
 
 public class ServiceDiscoveryRegistryDirectory<T> extends DynamicDirectory<T> implements NotifyListener {
     private static final Logger logger = LoggerFactory.getLogger(ServiceDiscoveryRegistryDirectory.class);
@@ -50,8 +66,30 @@ public class ServiceDiscoveryRegistryDirectory<T> extends DynamicDirectory<T> im
 
     private ServiceInstancesChangedListener listener;
 
+    private ServiceDiscoveryConsumerConfigurationListener CONSUMER_CONFIGURATION_LISTENER = new ServiceDiscoveryConsumerConfigurationListener();
+    private ServiceDiscoveryReferenceConfigurationListener referenceConfigurationListener;
+    // The initial value is null and the midway may be assigned to null, please use the local variable reference
+    protected volatile Set<URL> cachedInvokerUrls;
+
+
     public ServiceDiscoveryRegistryDirectory(Class<T> serviceType, URL url) {
         super(serviceType, url);
+    }
+
+    @Override
+    public void subscribe(URL url) {
+        setConsumerUrl(url);
+        CONSUMER_CONFIGURATION_LISTENER.addNotifyListener(this);
+        referenceConfigurationListener = new ServiceDiscoveryReferenceConfigurationListener(this, url);
+        registry.subscribe(url, this);
+    }
+
+    @Override
+    public void unSubscribe(URL url) {
+        setConsumerUrl(null);
+        CONSUMER_CONFIGURATION_LISTENER.removeNotifyListener(this);
+        referenceConfigurationListener.stop();
+        registry.unsubscribe(url, this);
     }
 
     @Override
@@ -72,9 +110,6 @@ public class ServiceDiscoveryRegistryDirectory<T> extends DynamicDirectory<T> im
 
     @Override
     public synchronized void notify(List<URL> instanceUrls) {
-        // Set the context of the address notification thread.
-        RpcContext.setRpcContext(getConsumerUrl());
-
         /**
          * 3.x added for extend URL address
          */
@@ -86,13 +121,58 @@ public class ServiceDiscoveryRegistryDirectory<T> extends DynamicDirectory<T> im
             }
         }
 
-        refreshInvoker(instanceUrls);
+        refreshOverrideAndInvoker(instanceUrls, false);
     }
 
-    private void refreshInvoker(List<URL> invokerUrls) {
+    private String judgeCategory(URL url) {
+        if (UrlUtils.isConfigurator(url)) {
+            return CONFIGURATORS_CATEGORY;
+        } else if (UrlUtils.isRoute(url)) {
+            return ROUTERS_CATEGORY;
+        } else if (UrlUtils.isProvider(url)) {
+            return PROVIDERS_CATEGORY;
+        }
+        return "";
+    }
+
+    private Optional<List<Router>> toRouters(List<URL> urls) {
+        if (urls == null || urls.isEmpty()) {
+            return Optional.empty();
+        }
+
+        List<Router> routers = new ArrayList<>();
+        for (URL url : urls) {
+            if (EMPTY_PROTOCOL.equals(url.getProtocol())) {
+                continue;
+            }
+            String routerType = url.getParameter(ROUTER_KEY);
+            if (routerType != null && routerType.length() > 0) {
+                url = url.setProtocol(routerType);
+            }
+            try {
+                Router router = ROUTER_FACTORY.getRouter(url);
+                if (!routers.contains(router)) {
+                    routers.add(router);
+                }
+            } catch (Throwable t) {
+                logger.error("convert router url to router error, url: " + url, t);
+            }
+        }
+
+        return Optional.of(routers);
+    }
+
+    private void refreshOverrideAndInvoker(List<URL> urls, boolean configuratorListenerCallback) {
+        //TODO跟前面重复设置
+        RpcContext.setRpcContext(getConsumerUrl());
+        // overrideDirectoryUrl();
+        refreshInvoker(urls, configuratorListenerCallback);
+    }
+
+    private void refreshInvoker(List<URL> invokerUrls, boolean configuratorListenerCallback) {
         Assert.notNull(invokerUrls, "invokerUrls should not be null, use empty url list to clear address.");
 
-        if (invokerUrls.size() == 0) {
+        if (!configuratorListenerCallback && invokerUrls.size() == 0) {
             this.forbidden = true; // Forbid to access
             this.invokers = Collections.emptyList();
             routerChain.setInvokers(this.invokers);
@@ -102,6 +182,17 @@ public class ServiceDiscoveryRegistryDirectory<T> extends DynamicDirectory<T> im
 
         this.forbidden = false; // Allow to access
         Map<String, Invoker<T>> oldUrlInvokerMap = this.urlInvokerMap; // local reference
+
+        if (invokerUrls == Collections.<URL>emptyList()) {
+            invokerUrls = new ArrayList<>();
+        }
+        if (invokerUrls.isEmpty() && this.cachedInvokerUrls != null) {
+            invokerUrls.addAll(this.cachedInvokerUrls);
+        } else {
+            this.cachedInvokerUrls = new HashSet<>();
+            this.cachedInvokerUrls.addAll(invokerUrls);//Cached invoker urls, convenient for comparison
+        }
+
         if (CollectionUtils.isEmpty(invokerUrls)) {
             return;
         }
@@ -159,6 +250,8 @@ public class ServiceDiscoveryRegistryDirectory<T> extends DynamicDirectory<T> im
             // FIXME, some keys may need to be removed.
             instanceAddressURL.addConsumerParams(getConsumerUrl().getProtocolServiceKey(), queryMap);
 
+            mergeUrl(instanceAddressURL);
+
             Invoker<T> invoker = urlInvokerMap == null ? null : urlInvokerMap.get(instanceAddressURL.getAddress());
             if (invoker == null || urlChanged(invoker, instanceAddressURL)) { // Not in the cache, refer again
                 try {
@@ -182,6 +275,59 @@ public class ServiceDiscoveryRegistryDirectory<T> extends DynamicDirectory<T> im
             }
         }
         return newUrlInvokerMap;
+    }
+
+    private InstanceAddressURL mergeUrl(InstanceAddressURL providerUrl) {
+        // providerUrl = ClusterUtils.mergeUrl(providerUrl, queryMap); // Merge the consumer side parameters
+
+        providerUrl = overrideWithConfigurator(providerUrl);
+
+        // The combination of directoryUrl and override is at the end of notify, which can't be handled here
+//        this.overrideDirectoryUrl = this.overrideDirectoryUrl.addParametersIfAbsent(providerUrl.getParameters()); // Merge the provider side parameters
+
+        /*
+        if ((providerUrl.getPath() == null || providerUrl.getPath()
+                .length() == 0) && DUBBO_PROTOCOL.equals(providerUrl.getProtocol())) { // Compatible version 1.0
+            //fix by tony.chenl DUBBO-44
+            String path = directoryUrl.getParameter(INTERFACE_KEY);
+            if (path != null) {
+                int i = path.indexOf('/');
+                if (i >= 0) {
+                    path = path.substring(i + 1);
+                }
+                i = path.lastIndexOf(':');
+                if (i >= 0) {
+                    path = path.substring(0, i);
+                }
+                providerUrl = providerUrl.setPath(path);
+            }
+        }*/
+
+        return providerUrl;
+    }
+
+    private InstanceAddressURL overrideWithConfigurator(InstanceAddressURL providerUrl) {
+        // override url with configurator from "override://" URL for dubbo 2.6 and before
+        providerUrl = overrideWithConfigurators(this.configurators, providerUrl);
+
+        // override url with configurator from configurator from "app-name.configurators"
+        providerUrl = overrideWithConfigurators(CONSUMER_CONFIGURATION_LISTENER.getConfigurators(), providerUrl);
+
+        // override url with configurator from configurators from "service-name.configurators"
+        if (referenceConfigurationListener != null) {
+            providerUrl = overrideWithConfigurators(referenceConfigurationListener.getConfigurators(), providerUrl);
+        }
+
+        return providerUrl;
+    }
+
+    private InstanceAddressURL overrideWithConfigurators(List<Configurator> configurators, InstanceAddressURL url) {
+        if (CollectionUtils.isNotEmpty(configurators)) {
+            for (Configurator configurator : configurators) {
+                url = (InstanceAddressURL) configurator.configure(url);
+            }
+        }
+        return url;
     }
 
     private boolean urlChanged(Invoker<T> invoker, InstanceAddressURL newURL) {
@@ -260,6 +406,48 @@ public class ServiceDiscoveryRegistryDirectory<T> extends DynamicDirectory<T> im
                     }
                 }
             }
+        }
+    }
+
+    private static class ServiceDiscoveryReferenceConfigurationListener extends AbstractConfiguratorListener {
+        private ServiceDiscoveryRegistryDirectory directory;
+        private URL url;
+
+        ServiceDiscoveryReferenceConfigurationListener(ServiceDiscoveryRegistryDirectory directory, URL url) {
+            this.directory = directory;
+            this.url = url;
+            this.initWith(DynamicConfiguration.getRuleKey(url) + CONFIGURATORS_SUFFIX);
+        }
+
+        void stop() {
+            this.stopListen(DynamicConfiguration.getRuleKey(url) + CONFIGURATORS_SUFFIX);
+        }
+
+        @Override
+        protected void notifyOverrides() {
+            // to notify configurator/router changes
+            directory.refreshOverrideAndInvoker(Collections.emptyList(), true);
+        }
+    }
+
+    private static class ServiceDiscoveryConsumerConfigurationListener extends AbstractConfiguratorListener {
+        List<ServiceDiscoveryRegistryDirectory> listeners = new ArrayList<>();
+
+        ServiceDiscoveryConsumerConfigurationListener() {
+            this.initWith(ApplicationModel.getApplication() + CONFIGURATORS_SUFFIX);
+        }
+
+        void addNotifyListener(ServiceDiscoveryRegistryDirectory listener) {
+            this.listeners.add(listener);
+        }
+
+        void removeNotifyListener(ServiceDiscoveryRegistryDirectory listener) {
+            this.listeners.remove(listener);
+        }
+
+        @Override
+        protected void notifyOverrides() {
+            listeners.forEach(listener -> listener.refreshOverrideAndInvoker(Collections.emptyList(), true));
         }
     }
 }

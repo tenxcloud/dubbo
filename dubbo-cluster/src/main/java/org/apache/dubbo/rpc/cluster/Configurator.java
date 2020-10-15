@@ -16,6 +16,7 @@
  */
 package org.apache.dubbo.rpc.cluster;
 
+import org.apache.dubbo.common.InstanceURL;
 import org.apache.dubbo.common.URL;
 import org.apache.dubbo.common.extension.ExtensionLoader;
 import org.apache.dubbo.common.utils.CollectionUtils;
@@ -52,6 +53,7 @@ public interface Configurator extends Comparable<Configurator> {
      */
     URL configure(URL url);
 
+    InstanceURL configureInstanceURL(InstanceURL url);
 
     /**
      * Convert override urls to map for use when re-refer. Send all rules every time, the urls will be reassembled and

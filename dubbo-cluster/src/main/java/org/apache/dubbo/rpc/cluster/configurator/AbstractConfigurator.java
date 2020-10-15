@@ -16,6 +16,7 @@
  */
 package org.apache.dubbo.rpc.cluster.configurator;
 
+import org.apache.dubbo.common.InstanceURL;
 import org.apache.dubbo.common.URL;
 import org.apache.dubbo.common.utils.NetUtils;
 import org.apache.dubbo.common.utils.StringUtils;
@@ -154,5 +155,25 @@ public abstract class AbstractConfigurator implements Configurator {
     }
 
     protected abstract URL doConfigure(URL currentUrl, URL configUrl);
+
+    @Override
+    public InstanceURL configureInstanceURL(InstanceURL url) {
+        // If override url is not enabled or is invalid, just return.
+        if (!configuratorUrl.getParameter(ENABLED_KEY, true) || configuratorUrl.getHost() == null || url == null || url.getHost() == null) {
+            return url;
+        }
+
+        String currentSide = url.getParameter(SIDE_KEY);
+        String configuratorSide = configuratorUrl.getParameter(SIDE_KEY);
+        if (currentSide.equals(configuratorSide) && CONSUMER.equals(configuratorSide) && 0 == configuratorUrl.getPort()) {
+            url = (InstanceURL)configureIfMatch(NetUtils.getLocalHost(), url);
+        } else if (currentSide.equals(configuratorSide) && PROVIDER.equals(configuratorSide) && url.getPort() == configuratorUrl.getPort()) {
+            url = (InstanceURL)configureIfMatch(url.getHost(), url);
+        }
+
+        return url;
+    }
+
+
 
 }

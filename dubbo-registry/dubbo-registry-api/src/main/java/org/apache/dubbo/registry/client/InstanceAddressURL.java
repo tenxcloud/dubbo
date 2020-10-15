@@ -16,7 +16,9 @@
  */
 package org.apache.dubbo.registry.client;
 
+import org.apache.dubbo.common.InstanceURL;
 import org.apache.dubbo.common.URL;
+import org.apache.dubbo.common.utils.CollectionUtils;
 import org.apache.dubbo.common.utils.StringUtils;
 import org.apache.dubbo.metadata.MetadataInfo;
 import org.apache.dubbo.rpc.RpcContext;
@@ -30,9 +32,11 @@ import static org.apache.dubbo.common.constants.CommonConstants.INTERFACE_KEY;
 import static org.apache.dubbo.common.constants.CommonConstants.REMOTE_APPLICATION_KEY;
 import static org.apache.dubbo.common.constants.CommonConstants.VERSION_KEY;
 
-public class InstanceAddressURL extends URL {
+public class InstanceAddressURL extends InstanceURL{
     private ServiceInstance instance;
     private MetadataInfo metadataInfo;
+
+    private Map<String, Map<String, String>> parameters;
 
     // cached numbers
     private volatile transient Map<String, Number> numbers;
@@ -110,6 +114,12 @@ public class InstanceAddressURL extends URL {
             return instance.getServiceName();
         }
 
+
+        String value = getProtocolService(key);
+        if (StringUtils.isNotEmpty(value)) {
+            return value;
+        }
+
         String protocolServiceKey = getProtocolServiceKey();
         if (protocolServiceKey == null) {
             return getInstanceParameter(key);
@@ -149,7 +159,36 @@ public class InstanceAddressURL extends URL {
         if (protocolServiceKey == null) {
             return null;
         }
+
+        String value = getProtocolService(method + "." + key);
+        if (StringUtils.isNotEmpty(value)) {
+            return value;
+        }
+        value = getProtocolService(key);
+        if (StringUtils.isNotEmpty(value)) {
+            return value;
+        }
+
         return getServiceMethodParameter(protocolServiceKey, method, key);
+    }
+
+    private String getProtocolService(String key) {
+        String protocolServiceKey = getProtocolServiceKey();
+        if (protocolServiceKey == null) {
+            return null;
+        }
+
+        if (null != parameters) {
+            Map<String, String> protocolMap = parameters.get(protocolServiceKey);
+            if (null != protocolMap) {
+                String value = protocolMap.get(key);
+                if (StringUtils.isNotEmpty(value)) {
+                    return value;
+                }
+            }
+        }
+
+        return null;
     }
 
     /**
@@ -243,6 +282,29 @@ public class InstanceAddressURL extends URL {
             return getInstance().getAllParams();
         }
         return getServiceParameters(protocolServiceKey);
+    }
+
+    @Override
+    public URL addParameters(Map<String, String> parameters) {
+        if (CollectionUtils.isEmptyMap(parameters)) {
+            return this;
+        }
+
+        if (null == this.parameters) {
+            this.parameters = new HashMap<>();
+        }
+
+        String processKey = getProtocolServiceKey();
+
+        Map<String, String> processKeyMap = this.parameters.get(processKey);
+        if (null == processKeyMap) {
+            processKeyMap = new HashMap<>();
+            this.parameters.put(processKey, processKeyMap);
+        }
+
+        processKeyMap.putAll(parameters);
+
+        return this;
     }
 
     @Override
