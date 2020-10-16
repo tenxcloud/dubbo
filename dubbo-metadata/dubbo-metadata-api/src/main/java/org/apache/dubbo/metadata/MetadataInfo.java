@@ -405,11 +405,19 @@ public class MetadataInfo implements Serializable {
             return numbers;
         }
 
+        public void clearNumbers() {
+            this.getNumbers().clear();
+        }
+
         public Map<String, Map<String, Number>> getMethodNumbers() {
             if (methodNumbers == null) { // concurrent initialization is tolerant
                 methodNumbers = new ConcurrentHashMap<>();
             }
             return methodNumbers;
+        }
+
+        public void clearMethodNumbers() {
+            this.getMethodNumbers().clear();
         }
 
         public URL getUrl() {

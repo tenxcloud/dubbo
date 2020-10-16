@@ -253,17 +253,23 @@ public class ServiceDiscoveryRegistryDirectory<T> extends DynamicDirectory<T> im
             mergeUrl(instanceAddressURL);
 
             Invoker<T> invoker = urlInvokerMap == null ? null : urlInvokerMap.get(instanceAddressURL.getAddress());
+
+            boolean enabled = true;
+            if (instanceAddressURL.hasParameter(DISABLED_KEY)) {
+                enabled = !instanceAddressURL.getParameter(DISABLED_KEY, false);
+            } else {
+                enabled = instanceAddressURL.getParameter(ENABLED_KEY, true);
+            }
+
+            if (!enabled) {
+                continue;
+            }
+
             if (invoker == null || urlChanged(invoker, instanceAddressURL)) { // Not in the cache, refer again
                 try {
-                    boolean enabled = true;
-                    if (instanceAddressURL.hasParameter(DISABLED_KEY)) {
-                        enabled = !instanceAddressURL.getParameter(DISABLED_KEY, false);
-                    } else {
-                        enabled = instanceAddressURL.getParameter(ENABLED_KEY, true);
-                    }
-                    if (enabled) {
-                        invoker = protocol.refer(serviceType, instanceAddressURL);
-                    }
+
+                    invoker = protocol.refer(serviceType, instanceAddressURL);
+
                 } catch (Throwable t) {
                     logger.error("Failed to refer invoker for interface:" + serviceType + ",url:(" + instanceAddressURL + ")" + t.getMessage(), t);
                 }

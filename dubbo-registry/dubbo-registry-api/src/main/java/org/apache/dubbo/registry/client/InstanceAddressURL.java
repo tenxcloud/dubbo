@@ -115,7 +115,7 @@ public class InstanceAddressURL extends InstanceURL{
         }
 
 
-        String value = getProtocolService(key);
+        String value = getProtocolServiceParam(key);
         if (StringUtils.isNotEmpty(value)) {
             return value;
         }
@@ -160,11 +160,11 @@ public class InstanceAddressURL extends InstanceURL{
             return null;
         }
 
-        String value = getProtocolService(method + "." + key);
+        String value = getProtocolServiceParam(method + "." + key);
         if (StringUtils.isNotEmpty(value)) {
             return value;
         }
-        value = getProtocolService(key);
+        value = getProtocolServiceParam(key);
         if (StringUtils.isNotEmpty(value)) {
             return value;
         }
@@ -172,7 +172,7 @@ public class InstanceAddressURL extends InstanceURL{
         return getServiceMethodParameter(protocolServiceKey, method, key);
     }
 
-    private String getProtocolService(String key) {
+    private String getProtocolServiceParam(String key) {
         String protocolServiceKey = getProtocolServiceKey();
         if (protocolServiceKey == null) {
             return null;
@@ -181,10 +181,7 @@ public class InstanceAddressURL extends InstanceURL{
         if (null != parameters) {
             Map<String, String> protocolMap = parameters.get(protocolServiceKey);
             if (null != protocolMap) {
-                String value = protocolMap.get(key);
-                if (StringUtils.isNotEmpty(value)) {
-                    return value;
-                }
+                return protocolMap.get(key);
             }
         }
 
@@ -303,6 +300,9 @@ public class InstanceAddressURL extends InstanceURL{
         }
 
         processKeyMap.putAll(parameters);
+
+        getServiceInfo(processKey).clearMethodNumbers();
+        getServiceInfo(processKey).clearNumbers();
 
         return this;
     }

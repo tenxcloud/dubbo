@@ -73,6 +73,6 @@
    -->
 
     <dubbo:reference version="1.0.0" group="greeting" id="greetingService"
-                     interface="org.apache.dubbo.demo.GreetingService"/>
+                     interface="org.apache.dubbo.demo.GreetingService" actives="2"/>
 
 </beans>
