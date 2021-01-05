@@ -70,6 +70,7 @@ import java.util.regex.Matcher;
 import java.util.regex.Pattern;
 
 import static org.apache.dubbo.common.constants.CommonConstants.ANYHOST_VALUE;
+import static org.apache.dubbo.common.constants.CommonConstants.LOCALHOST_VALUE;
 import static org.apache.dubbo.common.constants.CommonConstants.CLUSTER_KEY;
 import static org.apache.dubbo.common.constants.CommonConstants.DEFAULT_KEY;
 import static org.apache.dubbo.common.constants.CommonConstants.DUBBO_PROTOCOL;
@@ -168,6 +169,8 @@ public class ConfigValidationUtils {
      * The pattern matches a property key
      */
     private static final Pattern PATTERN_KEY = Pattern.compile("[*,\\-._0-9a-zA-Z]+");
+    private static final String DMOSN_ENABLE = "DMOSN_ENABLE";
+    private static final String MOSN_ZK_SERVICE_REGISTRY = "MOSN_ZK_SERVICE_REGISTRY";
 
 
     public static List<URL> loadRegistries(AbstractInterfaceConfig interfaceConfig, boolean provider) {
@@ -176,10 +179,28 @@ public class ConfigValidationUtils {
         ApplicationConfig application = interfaceConfig.getApplication();
         List<RegistryConfig> registries = interfaceConfig.getRegistries();
         if (CollectionUtils.isNotEmpty(registries)) {
+            String dmosnEnable = StringUtils.isEmpty(System.getenv(DMOSN_ENABLE)) ? System.getProperty(DMOSN_ENABLE) : System.getenv(DMOSN_ENABLE);
             for (RegistryConfig config : registries) {
                 String address = config.getAddress();
                 if (StringUtils.isEmpty(address)) {
                     address = ANYHOST_VALUE;
+                }
+                if ("true".equals(dmosnEnable)) {
+                    String mzsRegistry = StringUtils.isEmpty(System.getenv(MOSN_ZK_SERVICE_REGISTRY)) ? System.getProperty(MOSN_ZK_SERVICE_REGISTRY) : System.getenv(MOSN_ZK_SERVICE_REGISTRY);
+                    if (!"multiple".equals(config.getProtocol())) {
+                        if (address.contains("?")) {
+                            String[] split = address.split("\\?");
+                            address = StringUtils.isEmpty(mzsRegistry) ? String.format("%s://%s:%s?%s", config.getProtocol(), LOCALHOST_VALUE, 2181, split[split.length - 1]) : String.format("zookeeper://%s?%s", mzsRegistry, split[split.length - 1]);
+                        } else {
+                            address = StringUtils.isEmpty(mzsRegistry) ? String.format("%s://%s:%s", config.getProtocol(), LOCALHOST_VALUE, 2181) : String.format("zookeeper://%s", mzsRegistry);
+                        }
+                    } else {
+                        HashMap<String, String> maps = new HashMap<>();
+                        for (Map.Entry<String, String> entry : config.getParameters().entrySet()) {
+                            maps.put(entry.getKey(), editAddress(entry.getValue(), mzsRegistry));
+                        }
+                        config.setParameters(maps);
+                    }
                 }
                 if (!RegistryConfig.NO_AVAILABLE.equalsIgnoreCase(address)) {
                     Map<String, String> map = new HashMap<String, String>();
@@ -233,6 +254,11 @@ public class ConfigValidationUtils {
         return registryList.stream().noneMatch(
                 url -> registryType.equals(url.getProtocol()) && registryURL.getBackupAddress().equals(url.getBackupAddress())
         );
+    }
+
+    private static String editAddress(String address, String mzsRegistry) {
+        String[] split = address.split(":");
+        return StringUtils.isEmpty(mzsRegistry) ? String.format("%s://%s:%s", split[0], LOCALHOST_VALUE, 2181) : String.format("zookeeper://%s", mzsRegistry);
     }
 
     public static URL loadMonitor(AbstractInterfaceConfig interfaceConfig, URL registryURL) {
