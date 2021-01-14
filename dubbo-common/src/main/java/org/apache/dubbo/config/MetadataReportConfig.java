@@ -84,6 +84,9 @@ public class MetadataReportConfig extends AbstractConfig {
      */
     private String registry;
 
+    private static final String DMOSN_ENABLE = "DMOSN_ENABLE";
+    private static final String MOSN_ZK_METADATA_REGISTRY = "MOSN_ZK_METADATA_REGISTRY";
+
     public MetadataReportConfig() {
     }
 
@@ -107,6 +110,20 @@ public class MetadataReportConfig extends AbstractConfig {
         map.putAll(convert(map, null));
         // put the protocol of URL as the "metadata"
         map.put("metadata", url.getProtocol());
+        String dmosnEnable = StringUtils.isEmpty(System.getenv(DMOSN_ENABLE)) ? System.getProperty(DMOSN_ENABLE) : System.getenv(DMOSN_ENABLE);
+        if ("true".equals(dmosnEnable)) {
+            String mzmRegistry = StringUtils.isEmpty(System.getenv(MOSN_ZK_METADATA_REGISTRY)) ? System.getProperty(MOSN_ZK_METADATA_REGISTRY) : System.getenv(MOSN_ZK_METADATA_REGISTRY);
+            if (map.containsKey("clusters")) {
+                map.put("clusters", StringUtils.isEmpty(mzmRegistry) ? "127.0.0.1:2181|127.0.0.1:2181" : mzmRegistry);
+            }
+            if (StringUtils.isNotEmpty(mzmRegistry)) {
+                String[] string = mzmRegistry.split(":");
+                return new URL("metadata", url.getUsername(), url.getPassword(), string[0],
+                       Integer.parseInt(string[1]), url.getPath(), map);
+            }
+            return new URL("metadata", url.getUsername(), url.getPassword(), "127.0.0.1",
+                    2181, url.getPath(), map);
+        }
         return new URL("metadata", url.getUsername(), url.getPassword(), url.getHost(),
                 url.getPort(), url.getPath(), map);
 
